@@ -89,11 +89,7 @@ export function runPerformanceSummary(
     ) {
       category = 'Billable';
     } else if (isExplicitBillable) {
-      if (combined.includes('idle') || combined.includes('ideal')) {
-        category = 'Idle';
-      } else {
-        category = 'Billable';
-      }
+      category = 'Billable';
     } else if (
       combined.includes('idle') ||
       combined.includes('ideal') ||

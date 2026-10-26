@@ -2,8 +2,12 @@ import { HcRuleConfig } from '../types';
 import { DEFAULT_HC_RULES } from '../config/defaultHcRules';
 
 /**
- * Calculates Headcount (HC) for a specific employee duration in minutes based on active HC rules.
- * Ensures all durations below 8.0 hours (e.g., 07:57, 07:50, 07:47) fall cleanly into brackets without gaps.
+ * Calculates Headcount (HC) for a specific task duration in minutes based on active HC rules.
+ * Headcount rules logic for Billing Report:
+ *  0.0 to 2.0 hrs  -> 0.25 Headcount
+ *  2.1 to 4.0 hrs  -> 0.50 Headcount
+ *  4.1 to 7.9 hrs  -> 0.75 Headcount
+ *  8.0+ hrs        -> 1.00 Headcount
  * @param minutes Duration in minutes
  * @param rules Custom or default HC rules
  */
@@ -39,3 +43,4 @@ export function calculateHcForMinutes(
 
   return 0;
 }
+

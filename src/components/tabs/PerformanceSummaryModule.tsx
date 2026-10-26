@@ -15,11 +15,16 @@ import {
   Calculator,
   Layers,
   ShieldAlert,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  RotateCcw,
+  X,
 } from 'lucide-react';
 import { TaskRecord, SelectedPeriod, HcRuleConfig } from '../../types';
 import { runPerformanceSummary } from '../../services/performanceEngine';
 import { formatMinutesToDuration, formatHc } from '../../utils/timeUtils';
-import { exportCsvReport } from '../../services/exportService';
+import { exportCsvReport, exportExcelReport, ExcelSheetData } from '../../services/exportService';
 
 interface PerformanceSummaryModuleProps {
   taskRecords: TaskRecord[];
@@ -36,16 +41,59 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
   onUploadTaskFile,
   onOpenSourceDrawer,
 }) => {
-  // Filter state
+  // Toolbar filter state
+  const [filterProject, setFilterProject] = useState<string>('ALL');
+  const [filterTaskName, setFilterTaskName] = useState<string>('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [activeCategoryTab, setActiveCategoryTab] = useState<
+    'ALL' | 'TASK_SUMMARY' | 'BILLABLE' | 'IDLE' | 'REWORK_NON_BILLABLE' | 'OTHER_NON_BILLABLE' | 'ABSENT' | 'UNAPPROVED'
+  >('ALL');
+
+  // Sorting state
+  type CategorySortKey = 'sNo' | 'empId' | 'empName' | 'team' | 'projectName' | 'taskName' | 'totalHours' | 'headCount';
+  type TaskSummarySortKey = 'sNo' | 'projectName' | 'taskName' | 'category' | 'recordCount' | 'totalHours' | 'headCount';
+  type SortDirection = 'asc' | 'desc';
+
+  const [categorySortKey, setCategorySortKey] = useState<CategorySortKey | null>(null);
+  const [categorySortDir, setCategorySortDir] = useState<SortDirection>('asc');
+
+  const [taskSummarySortKey, setTaskSummarySortKey] = useState<TaskSummarySortKey | null>(null);
+  const [taskSummarySortDir, setTaskSummarySortDir] = useState<SortDirection>('asc');
+
+  const handleCategorySort = (key: CategorySortKey) => {
+    if (categorySortKey === key) {
+      if (categorySortDir === 'asc') {
+        setCategorySortDir('desc');
+      } else {
+        setCategorySortKey(null);
+        setCategorySortDir('asc');
+      }
+    } else {
+      setCategorySortKey(key);
+      setCategorySortDir('asc');
+    }
+  };
+
+  const handleTaskSummarySort = (key: TaskSummarySortKey) => {
+    if (taskSummarySortKey === key) {
+      if (taskSummarySortDir === 'asc') {
+        setTaskSummarySortDir('desc');
+      } else {
+        setTaskSummarySortKey(null);
+        setTaskSummarySortDir('asc');
+      }
+    } else {
+      setTaskSummarySortKey(key);
+      setTaskSummarySortDir('asc');
+    }
+  };
+
+  // Top control panel state (triggers full re-run on Calculate & Validate)
   const [selectedProject, setSelectedProject] = useState<string>('ALL');
   const [durationMode, setDurationMode] = useState<'ENTIRE' | 'CUSTOM'>('CUSTOM');
   const [customFromDate, setCustomFromDate] = useState<string>(selectedPeriod.fromDate || '');
   const [customToDate, setCustomToDate] = useState<string>(selectedPeriod.toDate || '');
   const [includeUnapproved, setIncludeUnapproved] = useState<boolean>(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeCategoryTab, setActiveCategoryTab] = useState<
-    'ALL' | 'TASK_SUMMARY' | 'BILLABLE' | 'IDLE' | 'REWORK_NON_BILLABLE' | 'OTHER_NON_BILLABLE' | 'ABSENT' | 'UNAPPROVED'
-  >('ALL');
 
   // Calculation parameters active state (triggers on Calculate & Validate)
   const [calcParams, setCalcParams] = useState({
@@ -56,7 +104,7 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
     includeUnapproved: false,
   });
 
-  // Extract unique project list from task records
+  // Extract unique project list from raw task records
   const uniqueProjects = useMemo(() => {
     return Array.from(new Set(taskRecords.map((r) => r.projectName).filter(Boolean))).sort();
   }, [taskRecords]);
@@ -89,29 +137,277 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
     calcParams.durationMode === 'ENTIRE'
   );
 
-  const filterRows = (rows: typeof report.billableRows) => {
-    if (!searchTerm) return rows;
-    const term = searchTerm.toLowerCase();
-    return rows.filter(
-      (r) =>
-        r.empId.toLowerCase().includes(term) ||
-        r.empName.toLowerCase().includes(term) ||
-        r.projectName.toLowerCase().includes(term) ||
-        r.taskName.toLowerCase().includes(term) ||
-        r.team.toLowerCase().includes(term)
+  // Dynamic projects list for toolbar dropdown (from all generated report sections)
+  const allReportProjects = useMemo(() => {
+    const set = new Set<string>();
+    [
+      ...report.billableRows,
+      ...report.idleRows,
+      ...report.reworkNonBillableRows,
+      ...report.otherNonBillableRows,
+      ...report.absentRows,
+      ...report.unapprovedRows,
+      ...report.taskSummaries,
+    ].forEach((r) => {
+      if (r.projectName) set.add(r.projectName);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [report]);
+
+  // Dynamic task names list for toolbar dropdown (filtered by selected project if applicable)
+  const allReportTasks = useMemo(() => {
+    const set = new Set<string>();
+    const allRows = [
+      ...report.billableRows,
+      ...report.idleRows,
+      ...report.reworkNonBillableRows,
+      ...report.otherNonBillableRows,
+      ...report.absentRows,
+      ...report.unapprovedRows,
+      ...report.taskSummaries,
+    ];
+    allRows.forEach((r) => {
+      if (filterProject === 'ALL' || r.projectName.toLowerCase() === filterProject.toLowerCase()) {
+        if (r.taskName) set.add(r.taskName);
+      }
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [report, filterProject]);
+
+  // Sorter for category rows
+  const sortRows = (rows: typeof report.billableRows) => {
+    if (!categorySortKey) return rows;
+    return [...rows].sort((a, b) => {
+      let cmp = 0;
+      switch (categorySortKey) {
+        case 'sNo':
+          cmp = a.sNo - b.sNo;
+          break;
+        case 'empId':
+          cmp = a.empId.localeCompare(b.empId, undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        case 'empName':
+          cmp = a.empName.localeCompare(b.empName, undefined, { sensitivity: 'base' });
+          break;
+        case 'team':
+          cmp = a.team.localeCompare(b.team, undefined, { sensitivity: 'base' });
+          break;
+        case 'projectName':
+          cmp = a.projectName.localeCompare(b.projectName, undefined, { sensitivity: 'base' });
+          break;
+        case 'taskName':
+          cmp = a.taskName.localeCompare(b.taskName, undefined, { sensitivity: 'base' });
+          break;
+        case 'totalHours':
+          cmp = a.totalMinutes - b.totalMinutes;
+          break;
+        case 'headCount':
+          cmp = a.calculatedHc - b.calculatedHc;
+          break;
+      }
+      return categorySortDir === 'asc' ? cmp : -cmp;
+    });
+  };
+
+  // Filter and sort category rows
+  const filterAndSortRows = (rows: typeof report.billableRows) => {
+    let result = rows;
+
+    // Filter by project dropdown
+    if (filterProject !== 'ALL') {
+      result = result.filter(
+        (r) => r.projectName.toLowerCase() === filterProject.toLowerCase()
+      );
+    }
+
+    // Filter by task name dropdown
+    if (filterTaskName !== 'ALL') {
+      result = result.filter(
+        (r) => r.taskName.toLowerCase() === filterTaskName.toLowerCase()
+      );
+    }
+
+    // Filter by search query (employee name, ID, task name, project, team)
+    if (searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      result = result.filter(
+        (r) =>
+          r.empName.toLowerCase().includes(term) ||
+          r.empId.toLowerCase().includes(term) ||
+          r.taskName.toLowerCase().includes(term) ||
+          r.projectName.toLowerCase().includes(term) ||
+          r.team.toLowerCase().includes(term)
+      );
+    }
+
+    return sortRows(result);
+  };
+
+  // Filter and sort task summaries
+  const filteredAndSortedTaskSummaries = useMemo(() => {
+    let result = report.taskSummaries;
+
+    if (filterProject !== 'ALL') {
+      result = result.filter(
+        (t) => t.projectName.toLowerCase() === filterProject.toLowerCase()
+      );
+    }
+
+    if (filterTaskName !== 'ALL') {
+      result = result.filter(
+        (t) => t.taskName.toLowerCase() === filterTaskName.toLowerCase()
+      );
+    }
+
+    if (searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      result = result.filter(
+        (t) =>
+          t.taskName.toLowerCase().includes(term) ||
+          t.projectName.toLowerCase().includes(term) ||
+          t.category.toLowerCase().includes(term)
+      );
+    }
+
+    if (!taskSummarySortKey) return result;
+
+    return [...result].sort((a, b) => {
+      let cmp = 0;
+      switch (taskSummarySortKey) {
+        case 'sNo':
+          cmp = a.sNo - b.sNo;
+          break;
+        case 'projectName':
+          cmp = a.projectName.localeCompare(b.projectName, undefined, { sensitivity: 'base' });
+          break;
+        case 'taskName':
+          cmp = a.taskName.localeCompare(b.taskName, undefined, { sensitivity: 'base' });
+          break;
+        case 'category':
+          cmp = a.category.localeCompare(b.category, undefined, { sensitivity: 'base' });
+          break;
+        case 'recordCount':
+          cmp = a.recordCount - b.recordCount;
+          break;
+        case 'totalHours':
+          cmp = a.totalMinutes - b.totalMinutes;
+          break;
+        case 'headCount':
+          cmp = a.calculatedHc - b.calculatedHc;
+          break;
+      }
+      return taskSummarySortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [report.taskSummaries, filterProject, filterTaskName, searchTerm, taskSummarySortKey, taskSummarySortDir]);
+
+  const hasActiveFilters =
+    filterProject !== 'ALL' ||
+    filterTaskName !== 'ALL' ||
+    searchTerm.trim().length > 0 ||
+    categorySortKey !== null ||
+    taskSummarySortKey !== null;
+
+  const activeFilterCount =
+    (filterProject !== 'ALL' ? 1 : 0) +
+    (filterTaskName !== 'ALL' ? 1 : 0) +
+    (searchTerm.trim() ? 1 : 0) +
+    (categorySortKey !== null || taskSummarySortKey !== null ? 1 : 0);
+
+  const handleResetFilters = () => {
+    setFilterProject('ALL');
+    setFilterTaskName('ALL');
+    setSearchTerm('');
+    setCategorySortKey(null);
+    setCategorySortDir('asc');
+    setTaskSummarySortKey(null);
+    setTaskSummarySortDir('asc');
+  };
+
+  const renderCategoryTh = (
+    label: string,
+    colKey: CategorySortKey,
+    align: 'left' | 'center' | 'right' = 'left',
+    widthClass = ''
+  ) => {
+    const isSorted = categorySortKey === colKey;
+    return (
+      <th
+        onClick={() => handleCategorySort(colKey)}
+        className={`p-3 text-${align} ${widthClass} font-bold uppercase tracking-wider text-[11px] cursor-pointer select-none transition-colors hover:bg-slate-200 group ${
+          isSorted ? 'bg-purple-100/70 text-purple-900' : ''
+        }`}
+        title={`Click to sort by ${label} (${
+          isSorted
+            ? categorySortDir === 'asc'
+              ? 'Ascending - Click for Descending'
+              : 'Descending - Click to clear'
+            : 'Click to sort'
+        })`}
+      >
+        <div
+          className={`flex items-center gap-1.5 ${
+            align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'
+          }`}
+        >
+          <span>{label}</span>
+          <span className="shrink-0">
+            {isSorted ? (
+              categorySortDir === 'asc' ? (
+                <ArrowUp className="w-3.5 h-3.5 text-purple-700 font-bold" />
+              ) : (
+                <ArrowDown className="w-3.5 h-3.5 text-purple-700 font-bold" />
+              )
+            ) : (
+              <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-40 group-hover:opacity-100 transition-opacity" />
+            )}
+          </span>
+        </div>
+      </th>
     );
   };
 
-  const filteredTaskSummaries = useMemo(() => {
-    if (!searchTerm) return report.taskSummaries;
-    const term = searchTerm.toLowerCase();
-    return report.taskSummaries.filter(
-      (t) =>
-        t.projectName.toLowerCase().includes(term) ||
-        t.taskName.toLowerCase().includes(term) ||
-        t.category.toLowerCase().includes(term)
+  const renderTaskTh = (
+    label: string,
+    colKey: TaskSummarySortKey,
+    align: 'left' | 'center' | 'right' = 'left',
+    widthClass = ''
+  ) => {
+    const isSorted = taskSummarySortKey === colKey;
+    return (
+      <th
+        onClick={() => handleTaskSummarySort(colKey)}
+        className={`p-3 text-${align} ${widthClass} font-bold uppercase tracking-wider text-[11px] cursor-pointer select-none transition-colors hover:bg-slate-200 group ${
+          isSorted ? 'bg-purple-100/70 text-purple-900' : ''
+        }`}
+        title={`Click to sort by ${label} (${
+          isSorted
+            ? taskSummarySortDir === 'asc'
+              ? 'Ascending - Click for Descending'
+              : 'Descending - Click to clear'
+            : 'Click to sort'
+        })`}
+      >
+        <div
+          className={`flex items-center gap-1.5 ${
+            align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'
+          }`}
+        >
+          <span>{label}</span>
+          <span className="shrink-0">
+            {isSorted ? (
+              taskSummarySortDir === 'asc' ? (
+                <ArrowUp className="w-3.5 h-3.5 text-purple-700 font-bold" />
+              ) : (
+                <ArrowDown className="w-3.5 h-3.5 text-purple-700 font-bold" />
+              )
+            ) : (
+              <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-40 group-hover:opacity-100 transition-opacity" />
+            )}
+          </span>
+        </div>
+      </th>
     );
-  }, [report.taskSummaries, searchTerm]);
+  };
 
   const handleExportPerformanceCsv = () => {
     const rows: (string | number)[][] = [];
@@ -119,7 +415,7 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
     // Task Summary Section
     rows.push(['=== TASK HOUR-BASED TOTAL HOURS & TOTAL HEADCOUNT SUMMARY ===']);
     rows.push(['S.No', 'Project Name', 'Task Name', 'Category', 'Logged Records', 'Total Hours', 'Calculated Head Count (HC)']);
-    report.taskSummaries.forEach((t) => {
+    filteredAndSortedTaskSummaries.forEach((t) => {
       rows.push([t.sNo, t.projectName, t.taskName, t.category, t.recordCount, formatMinutesToDuration(t.totalMinutes), formatHc(t.calculatedHc)]);
     });
     rows.push([]);
@@ -127,7 +423,7 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
     const appendCategorySection = (title: string, data: typeof report.billableRows) => {
       rows.push([`=== ${title.toUpperCase()} ===`]);
       rows.push(['S.No', 'EMP_ID', 'EMP_NAME', 'Team', 'Project Name', 'Task Name', 'Total Hours', 'Head count']);
-      data.forEach((r) => {
+      filterAndSortRows(data).forEach((r) => {
         rows.push([r.sNo, r.empId, r.empName, r.team, r.projectName, r.taskName, r.totalHoursRaw, formatHc(r.calculatedHc)]);
       });
       rows.push([]);
@@ -143,86 +439,172 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
     exportCsvReport(rows, `Performance_Summary_${activePeriod.fromDate}_to_${activePeriod.toDate}.csv`);
   };
 
-  const categoriesConfig = [
-    {
-      id: 'BILLABLE',
-      label: 'Billable',
-      icon: Briefcase,
-      color: 'emerald',
-      bgColor: 'bg-emerald-500',
-      cardBg: 'bg-emerald-50/60 border-emerald-200/80',
-      badgeColor: 'bg-emerald-100 text-emerald-800',
-      rows: filterRows(report.billableRows),
-      hours: report.totals.billableHoursMinutes,
-      hc: report.totals.billableHc,
-      count: report.billableRows.length,
-    },
-    {
-      id: 'IDLE',
-      label: 'Idle',
-      icon: Coffee,
-      color: 'amber',
-      bgColor: 'bg-amber-500',
-      cardBg: 'bg-amber-50/60 border-amber-200/80',
-      badgeColor: 'bg-amber-100 text-amber-800',
-      rows: filterRows(report.idleRows),
-      hours: report.totals.idleHoursMinutes,
-      hc: report.totals.idleHc,
-      count: report.idleRows.length,
-    },
-    {
-      id: 'REWORK_NON_BILLABLE',
-      label: 'Rework Non-Billable',
-      icon: AlertTriangle,
-      color: 'lime',
-      bgColor: 'bg-lime-500',
-      cardBg: 'bg-lime-50/60 border-lime-200/80',
-      badgeColor: 'bg-lime-100 text-lime-800',
-      rows: filterRows(report.reworkNonBillableRows),
-      hours: report.totals.reworkNonBillableHoursMinutes,
-      hc: report.totals.reworkNonBillableHc,
-      count: report.reworkNonBillableRows.length,
-    },
-    {
-      id: 'OTHER_NON_BILLABLE',
-      label: 'Other Non-Billable',
-      icon: Zap,
-      color: 'sky',
-      bgColor: 'bg-sky-500',
-      cardBg: 'bg-sky-50/60 border-sky-200/80',
-      badgeColor: 'bg-sky-100 text-sky-800',
-      rows: filterRows(report.otherNonBillableRows),
-      hours: report.totals.otherNonBillableHoursMinutes,
-      hc: report.totals.otherNonBillableHc,
-      count: report.otherNonBillableRows.length,
-    },
-    {
-      id: 'ABSENT',
-      label: 'Absent',
-      icon: UserX,
-      color: 'rose',
-      bgColor: 'bg-rose-500',
-      cardBg: 'bg-rose-50/60 border-rose-200/80',
-      badgeColor: 'bg-rose-100 text-rose-800',
-      rows: filterRows(report.absentRows),
-      hours: report.totals.absentHoursMinutes,
-      hc: report.totals.absentHc,
-      count: report.absentRows.length,
-    },
-    {
-      id: 'UNAPPROVED',
-      label: 'Unapproved Tasks',
-      icon: ShieldAlert,
-      color: 'red',
-      bgColor: 'bg-red-500',
-      cardBg: 'bg-red-50/60 border-red-200/80',
-      badgeColor: 'bg-red-100 text-red-800',
-      rows: filterRows(report.unapprovedRows),
-      hours: report.totals.unapprovedHoursMinutes,
-      hc: report.totals.unapprovedHc,
-      count: report.unapprovedRows.length,
-    },
-  ];
+  const handleExportPerformanceExcel = () => {
+    const sheets: ExcelSheetData[] = [];
+
+    // Sheet 1: Task Summary
+    const taskSummaryRows: (string | number)[][] = [
+      ['S.No', 'Project Name', 'Task Name', 'Category', 'Logged Entries', 'Total Hours', 'Calculated Head Count (HC)'],
+    ];
+    filteredAndSortedTaskSummaries.forEach((t) => {
+      taskSummaryRows.push([t.sNo, t.projectName, t.taskName, t.category, t.recordCount, formatMinutesToDuration(t.totalMinutes), formatHc(t.calculatedHc)]);
+    });
+    sheets.push({ sheetName: 'Task Summary', data: taskSummaryRows });
+
+    const createCategoryRows = (data: typeof report.billableRows) => {
+      const rows: (string | number)[][] = [
+        ['S.No', 'EMP_ID', 'EMP_NAME', 'Team', 'Project Name', 'Task Name', 'Total Hours', 'Head count'],
+      ];
+      filterAndSortRows(data).forEach((r) => {
+        rows.push([r.sNo, r.empId, r.empName, r.team, r.projectName, r.taskName, r.totalHoursRaw, formatHc(r.calculatedHc)]);
+      });
+      return rows;
+    };
+
+    sheets.push({ sheetName: 'Billable Tasks', data: createCategoryRows(report.billableRows) });
+    sheets.push({ sheetName: 'Idle Tasks', data: createCategoryRows(report.idleRows) });
+    sheets.push({ sheetName: 'Rework Non-Billable', data: createCategoryRows(report.reworkNonBillableRows) });
+    sheets.push({ sheetName: 'Other Non-Billable', data: createCategoryRows(report.otherNonBillableRows) });
+    sheets.push({ sheetName: 'Absent Tasks', data: createCategoryRows(report.absentRows) });
+    sheets.push({ sheetName: 'Unapproved Tasks', data: createCategoryRows(report.unapprovedRows) });
+
+    exportExcelReport(sheets, `Performance_Summary_${activePeriod.fromDate}_to_${activePeriod.toDate}.xlsx`);
+  };
+
+  const handleExportTaskSummaryExcel = () => {
+    const rows: (string | number)[][] = [
+      ['S.No', 'Project Name', 'Task Name', 'Category', 'Logged Entries', 'Total Hours', 'Calculated Head Count (HC)'],
+    ];
+    filteredAndSortedTaskSummaries.forEach((t) => {
+      rows.push([t.sNo, t.projectName, t.taskName, t.category, t.recordCount, formatMinutesToDuration(t.totalMinutes), formatHc(t.calculatedHc)]);
+    });
+    exportExcelReport(rows, `Task_Hour_Summary_${activePeriod.fromDate}_to_${activePeriod.toDate}.xlsx`);
+  };
+
+  const handleExportTaskSummaryCsv = () => {
+    const rows: (string | number)[][] = [
+      ['S.No', 'Project Name', 'Task Name', 'Category', 'Logged Entries', 'Total Hours', 'Calculated Head Count (HC)'],
+    ];
+    filteredAndSortedTaskSummaries.forEach((t) => {
+      rows.push([t.sNo, t.projectName, t.taskName, t.category, t.recordCount, formatMinutesToDuration(t.totalMinutes), formatHc(t.calculatedHc)]);
+    });
+    exportCsvReport(rows, `Task_Hour_Summary_${activePeriod.fromDate}_to_${activePeriod.toDate}.csv`);
+  };
+
+  const handleExportSectionExcel = (title: string, rowsData: typeof report.billableRows) => {
+    const rows: (string | number)[][] = [
+      ['S.No', 'EMP_ID', 'EMP_NAME', 'Team', 'Project Name', 'Task Name', 'Total Hours', 'Head count'],
+    ];
+    rowsData.forEach((r) => {
+      rows.push([r.sNo, r.empId, r.empName, r.team, r.projectName, r.taskName, r.totalHoursRaw, formatHc(r.calculatedHc)]);
+    });
+    const safeTitle = title.replace(/\s+/g, '_');
+    exportExcelReport(rows, `${safeTitle}_${activePeriod.fromDate}_to_${activePeriod.toDate}.xlsx`);
+  };
+
+  const handleExportSectionCsv = (title: string, rowsData: typeof report.billableRows) => {
+    const rows: (string | number)[][] = [
+      ['S.No', 'EMP_ID', 'EMP_NAME', 'Team', 'Project Name', 'Task Name', 'Total Hours', 'Head count'],
+    ];
+    rowsData.forEach((r) => {
+      rows.push([r.sNo, r.empId, r.empName, r.team, r.projectName, r.taskName, r.totalHoursRaw, formatHc(r.calculatedHc)]);
+    });
+    const safeTitle = title.replace(/\s+/g, '_');
+    exportCsvReport(rows, `${safeTitle}_${activePeriod.fromDate}_to_${activePeriod.toDate}.csv`);
+  };
+
+  const categoriesConfig = useMemo(() => {
+    return [
+      {
+        id: 'BILLABLE',
+        label: 'Billable',
+        icon: Briefcase,
+        color: 'emerald',
+        bgColor: 'bg-emerald-500',
+        cardBg: 'bg-emerald-50/60 border-emerald-200/80',
+        badgeColor: 'bg-emerald-100 text-emerald-800',
+        rawRows: report.billableRows,
+        rows: filterAndSortRows(report.billableRows),
+        rawHours: report.totals.billableHoursMinutes,
+        rawHc: report.totals.billableHc,
+      },
+      {
+        id: 'IDLE',
+        label: 'Idle',
+        icon: Coffee,
+        color: 'amber',
+        bgColor: 'bg-amber-500',
+        cardBg: 'bg-amber-50/60 border-amber-200/80',
+        badgeColor: 'bg-amber-100 text-amber-800',
+        rawRows: report.idleRows,
+        rows: filterAndSortRows(report.idleRows),
+        rawHours: report.totals.idleHoursMinutes,
+        rawHc: report.totals.idleHc,
+      },
+      {
+        id: 'REWORK_NON_BILLABLE',
+        label: 'Rework Non-Billable',
+        icon: AlertTriangle,
+        color: 'lime',
+        bgColor: 'bg-lime-500',
+        cardBg: 'bg-lime-50/60 border-lime-200/80',
+        badgeColor: 'bg-lime-100 text-lime-800',
+        rawRows: report.reworkNonBillableRows,
+        rows: filterAndSortRows(report.reworkNonBillableRows),
+        rawHours: report.totals.reworkNonBillableHoursMinutes,
+        rawHc: report.totals.reworkNonBillableHc,
+      },
+      {
+        id: 'OTHER_NON_BILLABLE',
+        label: 'Other Non-Billable',
+        icon: Zap,
+        color: 'sky',
+        bgColor: 'bg-sky-500',
+        cardBg: 'bg-sky-50/60 border-sky-200/80',
+        badgeColor: 'bg-sky-100 text-sky-800',
+        rawRows: report.otherNonBillableRows,
+        rows: filterAndSortRows(report.otherNonBillableRows),
+        rawHours: report.totals.otherNonBillableHoursMinutes,
+        rawHc: report.totals.otherNonBillableHc,
+      },
+      {
+        id: 'ABSENT',
+        label: 'Absent',
+        icon: UserX,
+        color: 'rose',
+        bgColor: 'bg-rose-500',
+        cardBg: 'bg-rose-50/60 border-rose-200/80',
+        badgeColor: 'bg-rose-100 text-rose-800',
+        rawRows: report.absentRows,
+        rows: filterAndSortRows(report.absentRows),
+        rawHours: report.totals.absentHoursMinutes,
+        rawHc: report.totals.absentHc,
+      },
+      {
+        id: 'UNAPPROVED',
+        label: 'Unapproved Tasks',
+        icon: ShieldAlert,
+        color: 'red',
+        bgColor: 'bg-red-500',
+        cardBg: 'bg-red-50/60 border-red-200/80',
+        badgeColor: 'bg-red-100 text-red-800',
+        rawRows: report.unapprovedRows,
+        rows: filterAndSortRows(report.unapprovedRows),
+        rawHours: report.totals.unapprovedHoursMinutes,
+        rawHc: report.totals.unapprovedHc,
+      },
+    ].map((c) => {
+      const filteredHours = c.rows.reduce((sum, r) => sum + r.totalMinutes, 0);
+      const filteredHc = c.rows.reduce((sum, r) => sum + r.calculatedHc, 0);
+      return {
+        ...c,
+        hours: filteredHours,
+        hc: filteredHc,
+        count: c.rows.length,
+        rawCount: c.rawRows.length,
+      };
+    });
+  }, [report, filterProject, filterTaskName, searchTerm, categorySortKey, categorySortDir]);
 
   if (!taskRecords || taskRecords.length === 0) {
     return (
@@ -485,25 +867,13 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
       </div>
 
       {/* Filter Toolbar & Category Switcher */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3.5">
         
-        {/* Search Input */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search project, task, employee..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none"
-          />
-        </div>
-
-        {/* Category Filter Tabs */}
-        <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar">
+        {/* Row 1: Category Filter Tabs */}
+        <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-1">
           <button
             onClick={() => setActiveCategoryTab('ALL')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
               activeCategoryTab === 'ALL'
                 ? 'bg-slate-900 text-white shadow-2xs'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -514,7 +884,7 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
           
           <button
             onClick={() => setActiveCategoryTab('TASK_SUMMARY')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeCategoryTab === 'TASK_SUMMARY'
                 ? 'bg-purple-600 text-white shadow-2xs'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -523,7 +893,7 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
             <Layers className="w-3.5 h-3.5" />
             <span>Task Hour & HC Summary</span>
             <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-slate-200 text-slate-800 font-mono">
-              {filteredTaskSummaries.length}
+              {filteredAndSortedTaskSummaries.length}
             </span>
           </button>
 
@@ -531,7 +901,7 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
             <button
               key={c.id}
               onClick={() => setActiveCategoryTab(c.id as typeof activeCategoryTab)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
                 activeCategoryTab === c.id
                   ? 'bg-purple-600 text-white shadow-2xs'
                   : 'text-slate-600 hover:bg-slate-100'
@@ -543,6 +913,90 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
               </span>
             </button>
           ))}
+        </div>
+
+        {/* Row 2: Search Input, Project Dropdown, Task Dropdown, Reset Filters */}
+        <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-slate-100">
+          
+          {/* Search Input (searches Employee Name, Employee ID, Task Name) */}
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search employee name, ID, or task..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none text-slate-900"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Project Name Select Dropdown */}
+          <div className="relative min-w-[190px] flex-1 sm:flex-initial">
+            <Briefcase className="w-3.5 h-3.5 text-purple-600 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <select
+              value={filterProject}
+              onChange={(e) => {
+                setFilterProject(e.target.value);
+                setFilterTaskName('ALL');
+              }}
+              className="w-full pl-8 pr-7 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-semibold outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer appearance-none"
+              title="Filter by Project Name"
+            >
+              <option value="ALL">All Projects ({allReportProjects.length})</option>
+              {allReportProjects.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+            <Filter className="w-3 h-3 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+
+          {/* Task Name Select Dropdown */}
+          <div className="relative min-w-[210px] flex-1 sm:flex-initial">
+            <Layers className="w-3.5 h-3.5 text-purple-600 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <select
+              value={filterTaskName}
+              onChange={(e) => setFilterTaskName(e.target.value)}
+              className="w-full pl-8 pr-7 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-semibold outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer appearance-none"
+              title="Filter by Task Name"
+            >
+              <option value="ALL">All Tasks ({allReportTasks.length})</option>
+              {allReportTasks.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <Filter className="w-3 h-3 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+
+          {/* Reset Filters & Sorting Button */}
+          {hasActiveFilters && (
+            <button
+              onClick={handleResetFilters}
+              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs shrink-0"
+              title="Reset all active filters and column sorting"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-purple-600" />
+              <span>Reset Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="w-4 h-4 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center font-bold">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+          )}
+
         </div>
 
       </div>
@@ -557,16 +1011,16 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
                 Task Hour-Based Total Hours & Total Headcount Summary (Approved Tasks)
               </h3>
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-800 text-purple-300">
-                {filteredTaskSummaries.length} Unique Tasks
+                {filteredAndSortedTaskSummaries.length} {filteredAndSortedTaskSummaries.length !== report.taskSummaries.length ? `/ ${report.taskSummaries.length}` : ''} Unique Tasks
               </span>
             </div>
 
             <div className="flex items-center space-x-4 text-xs font-mono">
               <span className="text-slate-300">
-                Total Hours: <strong className="text-white">{formatMinutesToDuration(report.totals.totalHoursMinutes)}</strong>
+                Total Hours: <strong className="text-white">{formatMinutesToDuration(filteredAndSortedTaskSummaries.reduce((sum, t) => sum + t.totalMinutes, 0))}</strong>
               </span>
               <span className="text-slate-300">
-                Total HC: <strong className="text-purple-300">{formatHc(report.totals.totalHc)} HC</strong>
+                Total HC: <strong className="text-purple-300">{formatHc(filteredAndSortedTaskSummaries.reduce((sum, t) => sum + t.calculatedHc, 0))} HC</strong>
               </span>
             </div>
           </div>
@@ -575,24 +1029,24 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
             <table className="w-full text-left border-collapse text-xs">
               <thead className="sticky top-0 z-10 bg-slate-100 text-slate-700 font-bold uppercase tracking-wider text-[11px] border-b border-slate-200">
                 <tr>
-                  <th className="p-3 text-center w-16">S.No</th>
-                  <th className="p-3 min-w-[180px]">Project Name</th>
-                  <th className="p-3 min-w-[200px]">Task Name</th>
-                  <th className="p-3 min-w-[140px]">Category</th>
-                  <th className="p-3 text-right font-mono min-w-[120px]">Logged Entries</th>
-                  <th className="p-3 text-right font-mono min-w-[130px]">Total Hours</th>
-                  <th className="p-3 text-right font-mono min-w-[140px]">Calculated Head Count (HC)</th>
+                  {renderTaskTh('S.No', 'sNo', 'center', 'w-16')}
+                  {renderTaskTh('Project Name', 'projectName', 'left', 'min-w-[180px]')}
+                  {renderTaskTh('Task Name', 'taskName', 'left', 'min-w-[200px]')}
+                  {renderTaskTh('Category', 'category', 'left', 'min-w-[140px]')}
+                  {renderTaskTh('Logged Entries', 'recordCount', 'right', 'min-w-[120px]')}
+                  {renderTaskTh('Total Hours', 'totalHours', 'right', 'min-w-[130px]')}
+                  {renderTaskTh('Calculated Head Count (HC)', 'headCount', 'right', 'min-w-[160px]')}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredTaskSummaries.length === 0 ? (
+                {filteredAndSortedTaskSummaries.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-8 text-center text-slate-400">
                       <p className="font-semibold text-xs">No task summary records found matching selection.</p>
                     </td>
                   </tr>
                 ) : (
-                  filteredTaskSummaries.map((t, idx) => (
+                  filteredAndSortedTaskSummaries.map((t, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 transition-colors">
                       <td className="p-3 text-center font-mono font-bold text-slate-500">{t.sNo}</td>
                       <td className="p-3 font-bold text-slate-900">{t.projectName}</td>
@@ -647,7 +1101,7 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
                     {c.label}
                   </h3>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-800 text-slate-300">
-                    {c.rows.length} Records
+                    {c.rows.length} {c.rows.length !== c.rawCount ? `/ ${c.rawCount}` : ''} Records
                   </span>
                 </div>
 
@@ -666,14 +1120,14 @@ export const PerformanceSummaryModule: React.FC<PerformanceSummaryModuleProps> =
                 <table className="w-full text-left border-collapse text-xs">
                   <thead className="sticky top-0 z-10 bg-slate-100 text-slate-700 font-bold uppercase tracking-wider text-[11px] border-b border-slate-200">
                     <tr>
-                      <th className="p-3 text-center w-16">S.No</th>
-                      <th className="p-3 min-w-[100px]">EMP_ID</th>
-                      <th className="p-3 min-w-[140px]">EMP_NAME</th>
-                      <th className="p-3 min-w-[100px]">Team</th>
-                      <th className="p-3 min-w-[160px]">Project Name</th>
-                      <th className="p-3 min-w-[180px]">Task Name</th>
-                      <th className="p-3 text-right font-mono min-w-[110px]">Total Hours</th>
-                      <th className="p-3 text-right font-mono min-w-[100px]">Head count</th>
+                      {renderCategoryTh('S.No', 'sNo', 'center', 'w-16')}
+                      {renderCategoryTh('EMP_ID', 'empId', 'left', 'min-w-[100px]')}
+                      {renderCategoryTh('EMP_NAME', 'empName', 'left', 'min-w-[150px]')}
+                      {renderCategoryTh('Team', 'team', 'left', 'min-w-[100px]')}
+                      {renderCategoryTh('Project Name', 'projectName', 'left', 'min-w-[160px]')}
+                      {renderCategoryTh('Task Name', 'taskName', 'left', 'min-w-[180px]')}
+                      {renderCategoryTh('Total Hours', 'totalHours', 'right', 'min-w-[110px]')}
+                      {renderCategoryTh('Head count', 'headCount', 'right', 'min-w-[100px]')}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">

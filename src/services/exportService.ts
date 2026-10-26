@@ -197,3 +197,36 @@ export function exportCsvReport(data: (string | number)[][], filename: string) {
   const blob = new Blob([csvOutput], { type: 'text/csv;charset=utf-8;' });
   saveAs(blob, filename);
 }
+
+export interface ExcelSheetData {
+  sheetName: string;
+  data: (string | number)[][];
+}
+
+export function exportExcelReport(
+  dataOrSheets: (string | number)[][] | ExcelSheetData[],
+  filename: string
+) {
+  const wb = XLSX.utils.book_new();
+
+  if (Array.isArray(dataOrSheets) && dataOrSheets.length > 0) {
+    const firstItem = dataOrSheets[0];
+    if (Array.isArray(firstItem)) {
+      // Single sheet data array
+      const ws = XLSX.utils.aoa_to_sheet(dataOrSheets as (string | number)[][]);
+      XLSX.utils.book_append_sheet(wb, ws, 'Report');
+    } else if (typeof firstItem === 'object' && firstItem !== null && 'sheetName' in firstItem) {
+      // Multi-sheet array: [{ sheetName: '...', data: [[...]] }]
+      (dataOrSheets as ExcelSheetData[]).forEach((item) => {
+        const ws = XLSX.utils.aoa_to_sheet(item.data);
+        const cleanSheetName = item.sheetName.replace(/[:\\/?*\[\]]/g, '').slice(0, 31) || 'Sheet';
+        XLSX.utils.book_append_sheet(wb, ws, cleanSheetName);
+      });
+    }
+  }
+
+  const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const finalFilename = filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`;
+  saveAs(blob, finalFilename);
+}

@@ -7,6 +7,7 @@ import {
   Printer,
   Download,
   ShieldCheck,
+  BarChart3,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -31,22 +32,22 @@ export const Header: React.FC<HeaderProps> = ({
           
           {/* Logo & Title */}
           <div className="flex items-center space-x-3.5">
-            <div className="p-2.5 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-xl shadow-lg shadow-emerald-500/20 text-slate-950 flex items-center justify-center">
-              <ShieldCheck className="w-7 h-7" />
+            <div className="p-2.5 bg-gradient-to-tr from-purple-600 to-indigo-500 rounded-xl shadow-lg shadow-purple-500/20 text-white flex items-center justify-center">
+              <BarChart3 className="w-7 h-7" />
             </div>
             <div>
               <div className="flex items-center space-x-2.5">
                 <h1 className="text-xl font-bold tracking-tight text-white font-sans">
-                  Task Billing Validator
+                  Performance Summary Validator
                 </h1>
-                <span className="px-2 py-0.5 text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" /> Enterprise QA v2.0
+                <span className="px-2 py-0.5 text-xs font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded-full flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" /> Enterprise Performance v2.0
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-medium flex items-center gap-2 mt-0.5">
-                <span>Hours & Count Reconciliation Tool</span>
+                <span>Task Hours & Headcount Validation Engine</span>
                 <span className="text-slate-600">•</span>
-                <span className="text-slate-300 italic font-mono text-[11px]">Upload. Compare. Validate. Report.</span>
+                <span className="text-slate-300 italic font-mono text-[11px]">Billable • Idle • Rework • Non-Billable • Absent</span>
               </p>
             </div>
           </div>

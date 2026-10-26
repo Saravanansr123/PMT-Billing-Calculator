@@ -10,15 +10,15 @@ export const DEFAULT_HC_RULES: HcRuleConfig[] = [
   },
   {
     id: 'hc-2',
-    minHours: 2.0001,
+    minHours: 2.000001,
     maxHours: 4.0,
     hcValue: 0.50,
     label: '2.1 – 4.0 Hours (0.50 HC)',
   },
   {
     id: 'hc-3',
-    minHours: 4.0001,
-    maxHours: 7.9999,
+    minHours: 4.000001,
+    maxHours: 7.99999,
     hcValue: 0.75,
     label: '4.1 – 7.9 Hours (0.75 HC)',
   },
